@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <memory>
 #include <type_traits>
+#include <iostream>
 
 namespace CmdArgs {
   std::string lowerString(const std::string str) {
@@ -74,7 +75,7 @@ namespace CmdArgs {
     T data;
     void parseArg(char *arg) override {
       // error check for no parameter
-      if (arg[0] == '-' || arg == "") {
+      if (arg[0] == '-') {
         // ternary here to make error messages look pretty
         throw std::invalid_argument("Command-line argument " + shortName + (shortName != "" && longName != "" ? "/" : "") + longName + " requires a value but none was given\n");
       }
@@ -105,7 +106,7 @@ namespace CmdArgs {
     T defaultValue;
     void parseArg(char *arg) override {
       // set data to the default value if no value is given in the command
-      if (arg[0] == '-' || arg == "") {
+      if (arg[0] == '-') {
         data = defaultValue;
         isDefined_ = true;
         return;
@@ -128,6 +129,7 @@ namespace CmdArgs {
   class FlagArg : public Argument {
   public:
     FlagArg(const std::string shortName, const std::string longName, const std::string description) : Argument(shortName, longName, description) {
+      data = false;
       isDefined_ = true;
     }
     bool value() {
@@ -135,7 +137,7 @@ namespace CmdArgs {
     }
   private:
     friend class ArgParser;
-    bool data{false};
+    bool data;
     void parseArg(char *arg) override {
       data = true;
       isSet_ = true;
@@ -152,8 +154,12 @@ namespace CmdArgs {
 
       // ensure the argument has at least one name
       if (arg.shortName == "-" && arg.longName == "--") throw std::invalid_argument("Command-line arguments must have at least one name\n");
-      if (arg.shortName != "-") arguments[arg.shortName] = argPtr;
-      if (arg.longName != "--") arguments[arg.longName] = argPtr;
+      if (arg.shortName != "-") {
+        arguments[arg.shortName] = argPtr;
+      }
+      if (arg.longName != "--") {
+        arguments[arg.longName] = argPtr;
+      }
       return argPtr;
     }
 
@@ -163,11 +169,13 @@ namespace CmdArgs {
         if (argv[i] == "") continue; // i don't actually know if it's possible for an empty string to end up in argv, but i'm also not going to risk it
 
         if (i < argc - 1) next = argv[i + 1];
-        else next[0] = '\0'; // TIL that "next = "";" goes against the ISO standard
+        else next[0] =  '-'; //
 
-        // check if the current item is the name of an argument, and call the argument's parseValue() if it is
+        // check if the current item is the name of an argument, and call the argument's parseArg() if it is
         auto argIt = arguments.find(argv[i]);
-        if (argIt != arguments.end()) argIt->second->parseArg(next);
+        if (argIt != arguments.end()) {
+          argIt->second->parseArg(next);
+        }
       }
     }
   private:
