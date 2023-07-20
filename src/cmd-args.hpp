@@ -1,8 +1,8 @@
 #pragma once
 #include <sstream>
-#include <map>
-#include <any>
+#include <unordered_map>
 #include <memory>
+#include <type_traits>
 
 namespace CmdArgs {
   std::string lowerString(const std::string str) {
@@ -36,134 +36,142 @@ namespace CmdArgs {
   class ArgParser;
 
   // base class for arguments
-  template <class T>
   class Argument {
   public:
-    Argument(const std::string shortName, const std::string longName, const std::string description) : shortName{shortName}, longName{longName}, description{description} {}
-    T getData() { return data; }
+    Argument(const std::string shortName, const std::string longName, const std::string description) : shortName{"-" + shortName}, longName{"--" + longName}, description{description} {}
+    virtual ~Argument() = default;
+
+    bool isSet() { return isSet_; }
     bool isDefined() { return isDefined_; }
-    bool wasSet() { return wasSet_; }
-    bool fail() { return failbit; }
-    bool noParameterError() { return noParameter; }
-    bool invalidParameterError() { return invalidParameter; };
 
     const std::string shortName;
     const std::string longName;
     const std::string description;
   protected:
     friend class ArgParser;
-    T data;
-    bool isDefined_{false}; // this is true if the value was set in the command, *or* if it was set from a default value
-    bool wasSet_{false};     // this is true only if the value was set in the command
-    bool failbit{false};
-    bool noParameter{false};
-    bool invalidParameter{false};
-
-    virtual void parseArg(const std::string arg);
+    bool isSet_{false};   // true only if the value was set in the command, not if it was set with a default value
+    bool isDefined_{false}; // true if the value was set in the command or with a default value
+    virtual void parseArg(char *arg) = 0;
   };
 
-  // basic arguments are set to a given value if they are found in the command,
-  // otherwise they are undefined.
+  // ValueArgs can (but don't have to) have a default value, and can be set in the commmand
+  // if they are set in the command, they must be accompannied by a value (even if they have a default value)
   template <class T>
-  class ValueArg : public Argument<T> {
+  class ValueArg : public Argument {
   public:
-    ValueArg(const std::string shortName, const std::string longName, const std::string description) : Argument<T>(shortName, longName, description) {}
-  protected:
-    friend class ArgParser;
-    void parseArg(const std::string arg) override {
-      if (arg[0] == '-' || arg == "") {
-        this->failbit = true;
-        this->noParameter = true;
-        return;
-      }
-
-      try {
-        this->data = stringToType<T>(arg);
-      } catch (std::invalid_argument) {
-        this->failbit = true;
-        this->invalidParameter = true;
-        return;
-      }
-
-      this->wasSet_ = true;
-      this->isDefined_ = true;
+    // ctor without default value
+    ValueArg(const std::string shortName, const std::string longName, const std::string description) : Argument(shortName, longName, description) {}
+    // ctor with default value
+    ValueArg(const std::string shortName, const std::string longName, const std::string description, const T defaultValue) : Argument(shortName, longName, description) {
+      data = defaultValue;
+      isDefined_ = true;
     }
-  };
-
-  // defaulted argments are set to a given value if they are found in the command,
-  // otherwise they are set to their default value.
-  template <class T>
-  class DefaultedArg : public Argument<T> {
-  public:
-    DefaultedArg(const std::string shortName, const std::string longName, const std::string description, const T defaultValue) : Argument<T>(shortName, longName, description) {
-      this->data = defaultValue;
-      this->isDefined_ = true;
-    }
-  protected:
-    friend class ArgParser;
-    void parseArg(const std::string arg) override {
-      if (arg[0] == '-' || arg == "") return;
-
-      try {
-        this->data = stringToType<T>(arg);
-      } catch (std::invalid_argument) {
-        this->failbit = true;
-        this->invalidParameter = true;
-        return;
-      }
-      this->wasSet_ = true;
-    }
-  };
-
-  // implicit arguments are set to a given value if they are found in the command,
-  // set to a default value if they are in the command without a given value,
-  // and undefined if they are not in the command at all.
-  template <class T>
-  class ImplicitArg : public Argument<T> {
-  public:
-    ImplicitArg(const std::string shortName, const std::string longName, const std::string description, const T dv) : Argument<T>(shortName, longName, description) {
-      this->defaultValue = dv;
-    }
-  protected:
-    friend class ArgParser;
-    void parseArg(const std::string arg) override {
-      if (arg[0] == '-' || arg == "") {
-        this->data = this->defaultValue;
-        this->isDefined_ = true;
-        return;
-      }
-      try {
-        this->data = stringToType<T>(arg);
-      } catch (std::invalid_argument) {
-        this->failbit = true;
-        this->invalidParameter = true;
-        return;
-      }
-      this->isDefined_ = true;
-      this->wasSet_ = true;
+    T value() {
+      return data;
     }
   private:
-    T defaultValue;
-  };
-  
-  // flag arguments can only be booleans, and cannot be given a value.
-  // if they are in the command they are true, otherwise, they are false
-  class FlagArg : public Argument<bool> {
-  public:
-    FlagArg(const std::string shortName, const std::string longName, const std::string description) : Argument<bool>(shortName, longName, description) {
-      this->data = false;
-      this->isDefined_ = true;
-    }
-  protected:
     friend class ArgParser;
-    void parseArg(const std::string arg) override {
-      this->data = true;
-      this->wasSet_ = true;
+    T data;
+    void parseArg(char *arg) override {
+      // error check for no parameter
+      if (arg[0] == '-' || arg == "") {
+        // ternary here to make error messages look pretty
+        throw std::invalid_argument("Command-line argument " + shortName + (shortName != "" && longName != "" ? "/" : "") + longName + " requires a value but none was given\n");
+      }
+
+      try {
+        data = stringToType<T>(arg);
+      } catch (std::invalid_argument) { // rethrow the error with a more informative description
+        throw std::invalid_argument("Command-line argument " + shortName + (shortName != "" && longName != "" ? "/" : "") + longName + " recieved an invalid value of \"" + arg + "\"\n");
+      }
+    }
+  };
+
+  // ImplicitArgs must have a default value, but are undefined unless they appear in the command
+  // if they appear in the command and are given a value, they are equal to that value,
+  // otherwise they are equal to their default value
+  template <typename T>
+  class ImplicitArg : public Argument {
+  public:
+    ImplicitArg(const std::string shortName, const std::string longName, const std::string description, const T dv) : Argument(shortName, longName, description) {
+      defaultValue = dv;
+    }
+    T value() {
+      return data;
+    }
+  private:
+    friend class ArgParser;
+    T data;
+    T defaultValue;
+    void parseArg(char *arg) override {
+      // set data to the default value if no value is given in the command
+      if (arg[0] == '-' || arg == "") {
+        data = defaultValue;
+        isDefined_ = true;
+        return;
+      }
+
+      try {
+        data = stringToType<T>(arg);
+      } catch (std::invalid_argument) { // rethrow the error with a more informative description
+        throw std::invalid_argument("Command-line argument " + shortName + (shortName != "" && longName != "" ? "/" : "") + longName + " recieved an invalid value of \"" + arg + "\"\n");
+      }
+
+      isDefined_ = true;
+      isSet_ = true;
+    }
+  };
+
+  // Flag arguments can only be booleans and cannot have a default value
+  // if a flag argument appears in the command, it is equal to true,
+  // otherwise, it is equal to false
+  class FlagArg : public Argument {
+  public:
+    FlagArg(const std::string shortName, const std::string longName, const std::string description) : Argument(shortName, longName, description) {
+      isDefined_ = true;
+    }
+    bool value() {
+      return data;
+    }
+  private:
+    friend class ArgParser;
+    bool data{false};
+    void parseArg(char *arg) override {
+      data = true;
+      isSet_ = true;
     }
   };
 
   class ArgParser {
+  public:
+    template <typename ArgType, typename... Args>
+    auto add(Args&&... args) {
+      static_assert(std::is_base_of<Argument, ArgType>::value, "Command-line arguments must be of type FlagArg, ImplicitArg, or ValueArg\n");
+      ArgType arg{args...};
+      auto argPtr = std::make_shared<ArgType>(arg);
+
+      // ensure the argument has at least one name
+      if (arg.shortName == "-" && arg.longName == "--") throw std::invalid_argument("Command-line arguments must have at least one name\n");
+      if (arg.shortName != "-") arguments[arg.shortName] = argPtr;
+      if (arg.longName != "--") arguments[arg.longName] = argPtr;
+      return argPtr;
+    }
+
+    void parseCmd(int argc, char **argv) {
+      char *next{};
+      for (int i{1}; i < argc; ++i) { // start at i=1 because the first item in argv is always the path to the executable
+        if (argv[i] == "") continue; // i don't actually know if it's possible for an empty string to end up in argv, but i'm also not going to risk it
+
+        if (i < argc - 1) next = argv[i + 1];
+        else next[0] = '\0'; // TIL that "next = "";" goes against the ISO standard
+
+        // check if the current item is the name of an argument, and call the argument's parseValue() if it is
+        auto argIt = arguments.find(argv[i]);
+        if (argIt != arguments.end()) argIt->second->parseArg(next);
+      }
+    }
   private:
-    std::map<std::string, std::shared_ptr<Argument<std::any> > > argObjects;
+    // arguments are stored as shared pointers so that they can have keys for both their long and short names
+    std::unordered_map<std::string, std::shared_ptr<Argument>> arguments;
   };
 }
