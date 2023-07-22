@@ -47,6 +47,12 @@ namespace CmdArgs {
     return lowered;
   }
 
+  enum Visibility {
+    VISIBLE,
+    HIDDEN,
+    INVISIBLE
+  };
+
   template <typename T>
   T stringToType(const std::string &str) {
     std::istringstream convert{str};
@@ -85,9 +91,11 @@ namespace CmdArgs {
   // base class for arguments
   class Argument {
   public:
+    Argument(const Visibility visibility, const std::string &shortName, const std::string &longName, std::string description) :
+        shortName{(!shortName.empty()) ? ("-" + shortName) : ("")}, longName{(!longName.empty()) ? ("--" + longName) : ""},
+        visibility{visibility}, description{std::move(description)} {}
     Argument(const std::string &shortName, const std::string &longName, std::string description) :
-          shortName{(!shortName.empty()) ? ("-" + shortName) : ("")}, longName{(!longName.empty()) ? ("--" + longName) : ""},
-          description{std::move(description)} {}
+        Argument(VISIBLE, shortName, longName, std::move(description)) {}
 
    virtual ~Argument() = default;
 
@@ -97,6 +105,8 @@ namespace CmdArgs {
     const std::string shortName;
     const std::string longName;
     const std::string description;
+    const Visibility visibility;
+
   protected:
     friend class ArgParser;
     bool isSet_{false};     // true only if the value was set in the command, not if it was set with a default value
@@ -110,28 +120,40 @@ namespace CmdArgs {
   template <class T>
   class ValueArg : public Argument {
   public:
-    // ctor without default value
-    ValueArg(const std::string &shortName, const std::string &longName, const std::string &description) :
-          Argument(shortName, longName, description) {}
-    // ctor with default value
-    ValueArg(const std::string &shortName, const std::string &longName, const std::string &description, const T &defaultValue) :
-          Argument(shortName, longName, description) {
+    // ctors
+    ValueArg(const Visibility visibility, const std::string &shortName, const std::string &longName, const std::string &description) :
+        Argument(visibility, shortName, longName, description) {}
+    ValueArg(const Visibility visibility, const std::string &shortName, const std::string &longName, const std::string &description, const T &defaultValue) :
+        Argument(visibility, shortName, longName, description) {
       data = defaultValue;
+      dv = defaultValue;
       isDefined_ = true;
-      hasDefault = true;
+      hasDefault_ = true;
     }
+    ValueArg(const std::string &shortName, const std::string &longName, const std::string &description) :
+        ValueArg(VISIBLE, shortName, longName, description) {}
+    ValueArg(const std::string &shortName, const std::string &longName, const std::string &description, const T &defaultValue) :
+        ValueArg(VISIBLE, shortName, longName, description, defaultValue) {}
+
     T value() const {
       return data;
     }
+    bool hasDefault() const {
+      return hasDefault_;
+    }
+    // returns the argument's default value. produces undefined behavior if the argument has a default value
+    T defaultValue() const {
+      return dv;
+    }
   private:
     friend class ArgParser;
-    T data;
-    bool hasDefault{false};
+    T data, dv;
+    bool hasDefault_{false};
     void parseArg(const char *arg) override {
       // error check for no parameter
       if (arg[0] == '-') {
-        // ternary here to make error messages look pretty
-        throw std::invalid_argument("Command-line argument " + shortName + (!shortName.empty() && !longName.empty() ? "/" : "")
+        // completely unnecessary ternary here to make error messages look a little prettier
+        throw std::invalid_argument("Command-line argument " + shortName + (!shortName.empty() && !longName.empty() ? "," : "")
                                     + longName + " requires a value but none was given\n");
       }
 
@@ -145,7 +167,7 @@ namespace CmdArgs {
 
     // *attempts* to return the default value (if it exists) as a string.
     std::string getDefaultAsString() override {
-      if (!hasDefault) return "";
+      if (!hasDefault_) return "";
       return {"=" + typeToString(data)};
     }
   };
@@ -156,21 +178,45 @@ namespace CmdArgs {
   template <typename T>
   class ImplicitArg : public Argument {
   public:
-    ImplicitArg(const std::string &shortName, const std::string &longName, const std::string &description, const T &dv) :
-          Argument(shortName, longName, description) {
-      defaultValue = dv;
+    // ctor without default value
+    ImplicitArg(const Visibility visibility, const std::string &shortName, const std::string &longName, const std::string &description, const T &sv) :
+        Argument(visibility, shortName, longName, description) {
+      setValue = sv;
     }
+    // ctor with default value
+    ImplicitArg(const Visibility visibility, const std::string &shortName, const std::string &longName, const std::string &description, const T &sv, const T &dv) :
+        Argument(visibility, shortName, longName, description) {
+      setValue = sv;
+      data = dv;
+      hasDefault_ = true;
+      isDefined_ = true;
+    }
+    ImplicitArg(const std::string &shortName, const std::string &longName, const std::string &description, const T &sv) :
+        ImplicitArg(VISIBLE, shortName, longName, description, sv) {}
+    ImplicitArg(const std::string &shortName, const std::string &longName, const std::string &description, const T &sv, const T &dv) :
+        ImplicitArg(VISIBLE, shortName, longName, description, sv, dv) {}
+
     T value() const {
       return data;
     }
+    T defaultSetValue() const {
+      return setValue;
+    }
+    bool hasDefault() const {
+      return hasDefault_;
+    }
+    T defaultValue() const {
+      return dv;
+    }
   private:
     friend class ArgParser;
-    T data;
-    T defaultValue;
+    T data, setValue, dv;
+    bool hasDefault_{false};
+
     void parseArg(const char *arg) override {
       // set data to the default value if no value is given in the command
       if (arg[0] == '-') {
-        data = defaultValue;
+        data = setValue;
         isDefined_ = true;
         return;
       }
@@ -187,7 +233,7 @@ namespace CmdArgs {
 
     // *attempts* to return the default value as a string.
     std::string getDefaultAsString() override {
-      return {"=arg(=" + typeToString(defaultValue) + ")"};
+      return {"=arg(=" + typeToString(setValue) + ")"};
     }
   };
 
@@ -196,10 +242,13 @@ namespace CmdArgs {
   // otherwise, it is equal to false
   class FlagArg : public Argument {
   public:
-    FlagArg(const std::string &shortName, const std::string &longName, const std::string &description) :
-          Argument(shortName, longName, description) {
+    FlagArg(const Visibility visibility, const std::string &shortName, const std::string &longName, const std::string &description) :
+        Argument(visibility, shortName, longName, description) {
       isDefined_ = true;
     }
+    FlagArg(const std::string &shortName, const std::string &longName, const std::string &description) :
+        FlagArg(VISIBLE, shortName, longName, description) { }
+
     bool value() const {
       return data;
     }
@@ -211,9 +260,7 @@ namespace CmdArgs {
       isSet_ = true;
     }
     // flags never have a default value, but this is still required for the help message
-    std::string getDefaultAsString() override {
-      return "";
-    }
+    std::string getDefaultAsString() override { return ""; }
   };
 
   class ArgParser {
@@ -226,8 +273,15 @@ namespace CmdArgs {
 
       // ensure the argument has at least one name
       if (arg.shortName == "" && arg.longName == "") throw std::invalid_argument("Command-line arguments must have at least one name\n");
+
+      // create one map entry for each of the argument's names
       if (arg.shortName != "") arguments[arg.shortName] = argPtr;
       if (arg.longName != "") arguments[arg.longName] = argPtr;
+
+      // add the argument to one of the two vectors based on its visibility (invisible arguments aren't added to either)
+      if (arg.visibility == VISIBLE) visibleArgs.push_back(argPtr);
+      else if (arg.visibility == HIDDEN) hiddenArgs.push_back(argPtr);
+
       return argPtr;
     }
 
@@ -240,54 +294,57 @@ namespace CmdArgs {
         if (i < argc - 1) next = argv[i + 1];
         else next = "";
 
-        std::cout << next << '\n';
-
-        // this would be auto, but "auto" is the only thing in this file that isn't supported by C++ 11
         auto argIt = arguments.find(argv[i]);
         if (argIt != arguments.end()) argIt->second->parseArg(next);
       }
     }
 
     // creates and returns a formatted help message containing every command
-    std::string createHelpMessage() {
-      // this isn't a great way to prevent duplicates,
-      // but i tried storing pointers in a vectors and it didn't work for some reason
-      std::vector<std::string> longNames;
-      std::vector<std::string> shortNames;
-      std::vector<std::string> defaultValues;
-      std::vector<std::string> descriptions;
-      // for formatting
+    std::string createHelpMessage(bool showHidden=false) {
+
+      // find the longest names and the longest default value
       size_t longestShortName{0};
       size_t longestLongName{0};
       size_t longestDefaultValue{0};
-      for (const auto& it : arguments) {
-        auto arg{it.second};
-        if (std::find(shortNames.begin(), shortNames.end(), arg->shortName) != shortNames.end()
-            && std::find(longNames.begin(), longNames.end(), arg->longName) != longNames.end()) continue;
-
-        shortNames.push_back(arg->shortName);
+      for (const auto& arg : visibleArgs) {
         if (arg->shortName.length() > longestShortName) longestShortName = arg->shortName.length();
-
-        longNames.push_back(arg->longName);
         if (arg->longName.length() > longestLongName) longestLongName = arg->longName.length();
-
-        defaultValues.push_back(arg->getDefaultAsString());
         if (arg->getDefaultAsString().length() > longestDefaultValue) longestDefaultValue = arg->getDefaultAsString().length();
+      }
 
-        descriptions.push_back(arg->description);
+      // also check the longest names and default value with the hidden arguments if they're enabled
+      if (showHidden) {
+        for (const auto& arg : hiddenArgs) {
+          if (arg->shortName.length() > longestShortName) longestShortName = arg->shortName.length();
+          if (arg->longName.length() > longestLongName) longestLongName = arg->longName.length();
+          if (arg->getDefaultAsString().length() > longestDefaultValue) longestDefaultValue = arg->getDefaultAsString().length();
+        }
       }
 
       std::ostringstream helpMessage;
       helpMessage << "[[Allowed Arguments]]\n";
 
-      // shortNames and longNames will always be the same size
-      for (size_t i{0}; i < shortNames.size(); ++i) {
+      // print the visible arguments
+      for (const auto &arg : visibleArgs) {
         // the long name and the default value are merged together to make formatting work
-        std::string longNameDefaultValue{longNames[i] + " " + defaultValues[i]};
+        std::string longNameDefaultValue{arg->longName + " " + arg->getDefaultAsString()};
 
-        helpMessage << "  " << std::right << std::setw(static_cast<int>(longestShortName)) << shortNames[i] << std::setw(0) << ", "
+        helpMessage << "  " << std::right << std::setw(static_cast<int>(longestShortName)) << arg->shortName << std::setw(0) << ", "
                     << std::left << std::setw(static_cast<int>(longestLongName + longestDefaultValue + 1)) << longNameDefaultValue
-                    << std::setw(0) << "  " << descriptions[i] << '\n';
+                    << std::setw(0) << "  " << arg->description << '\n';
+      }
+
+      // print the hidden arguments if they're enabled
+      if (showHidden) {
+        helpMessage << "[[Hidden Arguments]]\n";
+        for (const auto &arg : hiddenArgs) {
+          // the long name and the default value are merged together to make formatting work
+          std::string longNameDefaultValue{arg->longName + " " + arg->getDefaultAsString()};
+
+          helpMessage << "  " << std::right << std::setw(static_cast<int>(longestShortName)) << arg->shortName << std::setw(0) << ", "
+                      << std::left << std::setw(static_cast<int>(longestLongName + longestDefaultValue + 1)) << longNameDefaultValue
+                      << std::setw(0) << "  " << arg->description << '\n';
+        }
       }
 
       return helpMessage.str();
@@ -295,6 +352,10 @@ namespace CmdArgs {
   private:
     // arguments are stored as shared pointers so that they can have keys for both their long and short names
     std::map<std::string, std::shared_ptr<Argument>> arguments;
+
+    // used to separate argument visibilities in help messages (and to print arguments in order)
+    std::vector<std::shared_ptr<Argument>> visibleArgs;
+    std::vector<std::shared_ptr<Argument>> hiddenArgs;
   };
 }
 
