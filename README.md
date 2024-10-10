@@ -3,10 +3,10 @@
 A lightweight, header-only C++ library for parsing command-line arguments.
 
 ## Features
- - Header-only: Just add `cmd-args.hpp` to your project and `#include` it!
+ - Header-only: Just add `cmd-args.hpp` to your project and `#include` it
  - Simple, intuitive syntax
  - Supports C++ 11 onwards
- - Ultra-small - just over 200 lines! (not including comments and whitespace)
+ - Just over 200 lines (not including comments and whitespace)
 
 ## How To Use cmd-args
 
@@ -117,7 +117,6 @@ Produces:
   -f, --flag1                          a flag argument
     , --flag2                          another flag argument
 ```
-Note: If an implicit argument has a default value (the second one in the constructor), the help message won't display it. It probably will in the future.
 
 ### Hidden Arguments
 You can set an argument's visibility - which determines whether it appears in help messages - by including it as the first parameter in the `add()` method:
